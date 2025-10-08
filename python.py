@@ -1,5 +1,3 @@
-# python.py
-
 import streamlit as st
 import pandas as pd
 from google import genai
@@ -11,7 +9,51 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("Ứng dụng Phân Tích Báo Cáo Tài Chính 📊")
+# Thay st.title bằng st.markdown để tùy chỉnh màu (red) và kiểu chữ (italic)
+st.markdown("<h1 style='color: red; font-style: italic;'>Ứng dụng Phân Tích Báo Cáo Tài Chính 📊</h1>", unsafe_allow_html=True)
+
+# **********************************************
+# *********** KHỞI TẠO STATE & CHAT ************
+# **********************************************
+
+# 1. Khởi tạo Lịch sử Chat và Model Chat nếu chưa có
+if "messages" not in st.session_state:
+    st.session_state["messages"] = []
+
+if "chat" not in st.session_state:
+    try:
+        # Lấy API Key từ Secrets (Bạn cần đảm bảo đã cấu hình)
+        api_key = st.secrets.get("GEMINI_API_KEY")
+        if api_key:
+            client = genai.Client(api_key=api_key)
+            # Khởi tạo Chat Session với mô hình gemini-2.5-flash
+            st.session_state["chat"] = client.chats.create(model="gemini-2.5-flash")
+        else:
+            st.warning("Lỗi: Không tìm thấy Khóa API 'GEMINI_API_KEY'. Khung Chat AI sẽ không hoạt động.")
+            st.session_state["chat"] = None # Đặt là None nếu không có API key
+    except Exception as e:
+        st.error(f"Lỗi khởi tạo Gemini Client: {e}")
+        st.session_state["chat"] = None
+
+# **********************************************
+# *********** HÀM CHAT API MỚI *****************
+# **********************************************
+
+def send_chat_message(prompt):
+    """Gửi tin nhắn đến Chat Session đã khởi tạo và trả về phản hồi."""
+    # Kiểm tra xem chat session đã được khởi tạo thành công chưa
+    if st.session_state.get("chat") is None:
+        return "Lỗi: Không có Khóa API hoặc Chat Session không được khởi tạo."
+    
+    try:
+        # Gửi tin nhắn
+        response = st.session_state["chat"].send_message(prompt)
+        return response.text
+    except APIError as e:
+        return f"Lỗi gọi Gemini Chat API: {e}"
+    except Exception as e:
+        return f"Đã xảy ra lỗi không xác định trong lúc chat: {e}"
+
 
 # --- Hàm tính toán chính (Sử dụng Caching để Tối ưu hiệu suất) ---
 @st.cache_data
@@ -53,7 +95,7 @@ def process_financial_data(df):
     
     return df
 
-# --- Hàm gọi API Gemini ---
+# --- Hàm gọi API Gemini (Nhận xét) ---
 def get_ai_analysis(data_for_ai, api_key):
     """Gửi dữ liệu phân tích đến Gemini API và nhận nhận xét."""
     try:
@@ -124,9 +166,9 @@ if uploaded_file is not None:
                 no_ngan_han_N = df_processed[df_processed['Chỉ tiêu'].str.contains('NỢ NGẮN HẠN', case=False, na=False)]['Năm sau'].iloc[0]  
                 no_ngan_han_N_1 = df_processed[df_processed['Chỉ tiêu'].str.contains('NỢ NGẮN HẠN', case=False, na=False)]['Năm trước'].iloc[0]
 
-                # Tính toán
-                thanh_toan_hien_hanh_N = tsnh_n / no_ngan_han_N
-                thanh_toan_hien_hanh_N_1 = tsnh_n_1 / no_ngan_han_N_1
+                # Tính toán, xử lý lỗi chia cho 0
+                thanh_toan_hien_hanh_N = tsnh_n / no_ngan_han_N if no_ngan_han_N != 0 else 0
+                thanh_toan_hien_hanh_N_1 = tsnh_n_1 / no_ngan_han_N_1 if no_ngan_han_N_1 != 0 else 0
                 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -144,6 +186,10 @@ if uploaded_file is not None:
             except IndexError:
                  st.warning("Thiếu chỉ tiêu 'TÀI SẢN NGẮN HẠN' hoặc 'NỢ NGẮN HẠN' để tính chỉ số.")
                  thanh_toan_hien_hanh_N = "N/A" # Dùng để tránh lỗi ở Chức năng 5
+                 thanh_toan_hien_hanh_N_1 = "N/A"
+            except ZeroDivisionError:
+                 st.warning("Lỗi chia cho 0 khi tính chỉ số thanh toán hiện hành (Nợ ngắn hạn bằng 0).")
+                 thanh_toan_hien_hanh_N = "N/A" 
                  thanh_toan_hien_hanh_N_1 = "N/A"
             
             # --- Chức năng 5: Nhận xét AI ---
@@ -183,3 +229,47 @@ if uploaded_file is not None:
 
 else:
     st.info("Vui lòng tải lên file Excel để bắt đầu phân tích.")
+
+# **********************************************
+# *********** KHUNG CHAT HỎI ĐÁP ****************
+# **********************************************
+
+st.divider()
+
+st.header("6. Khung Chat Hỏi đáp với Gemini")
+st.caption("Bạn có thể hỏi thêm về các vấn đề tài chính. Khung chat này **chưa** ghi nhớ được ngữ cảnh phân tích ở mục 5, nên hãy cung cấp đủ thông tin nếu cần.")
+
+# Hiển thị lịch sử chat
+for message in st.session_state["messages"]:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Xử lý input từ người dùng
+if prompt := st.chat_input("Nhập câu hỏi của bạn về báo cáo tài chính..."):
+    
+    # 1. Thêm tin nhắn người dùng vào lịch sử và hiển thị
+    st.session_state["messages"].append({"role": "user", "content": prompt})
+    # Rerun để hiển thị tin nhắn người dùng ngay lập tức
+    st.rerun()
+
+# Logic xử lý sau khi người dùng nhập (chạy sau khi rerun)
+if st.session_state["messages"] and st.session_state["messages"][-1]["role"] == "user":
+    user_prompt = st.session_state["messages"][-1]["content"]
+    
+    # Kiểm tra nếu tin nhắn cuối cùng là của người dùng và chưa có phản hồi của trợ lý
+    if not (len(st.session_state["messages"]) > 1 and st.session_state["messages"][-2]["role"] == "assistant"):
+        
+        # 2. Gọi API để lấy phản hồi từ Gemini
+        with st.chat_message("assistant"):
+            with st.spinner("Gemini đang trả lời..."):
+                
+                # Gửi tin nhắn
+                full_response = send_chat_message(user_prompt)
+                
+                # Viết phản hồi ra màn hình
+                st.markdown(full_response)
+        
+        # 3. Thêm phản hồi của AI vào lịch sử
+        st.session_state["messages"].append({"role": "assistant", "content": full_response})
+        # Rerun để đảm bảo chat box được cập nhật hoàn toàn
+        st.rerun()
